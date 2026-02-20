@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build catch2 \
+            linux-headers-$(uname -r) build-essential
+
+      - name: Build kernel module (syntax check)
+        run: make -C drivers/thermal_i2c KDIR=/lib/modules/$(uname -r)/build
+
+      - name: Configure pipeline
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build pipeline
+        run: cmake --build build --parallel
+
+      - name: Test (stub mode, no TFLite required)
+        run: ctest --test-dir build --output-on-failure -V
+
+  python-bench:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Lint benchmark script
+        run: python3 -m py_compile benchmarks/inference_bench.py
+      - name: Run benchmark (stub mode)
+        run: python3 benchmarks/inference_bench.py --n 50
+
+  cross-compile-arm:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+      - name: Cross-compile
+        run: |
+          cmake -B build-arm -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=../embedded-hal-framework/cmake/arm-linux-gnueabihf.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=OFF
+          cmake --build build-arm --parallel
